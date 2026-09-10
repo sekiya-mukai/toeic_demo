@@ -1,21 +1,41 @@
 from openpyxl import load_workbook
+from pathlib import Path
 from datetime import datetime
+import logging
 
 
-QUESTION_FILE = "問題用紙.xlsx"
-RESULT_FILE = "結果用紙.xlsx"
+BASE_DIR = Path(__file__).parent.parent
+
+question_filename = "問題用紙.xlsx"
+answer_filename = "解答用紙.xlsx"
+
+QUESTION_FILE = BASE_DIR / question_filename
+ANSWER_FILE = BASE_DIR / answer_filename
+LOG_FILE = BASE_DIR / "output.log"
+
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    encoding="utf-8"
+)
+
+def log_print(message=""):
+    print(message)
+    logging.info(message)
 
 
 def load_answers(ws):
     """
-    A2:J21 の解答シートを読み込み
+    A2:J21 を読み込み、
     {問題番号: 解答}
-    の辞書を返却
+    の辞書を返す
     """
 
     answers = {}
 
     for row in range(2, 22, 2):
+
         question_row = row
         answer_row = row + 1
 
@@ -34,99 +54,113 @@ def load_answers(ws):
 
 def main():
 
-    print("=== TOEIC採点システム ===")
+    log_print("=== TOEIC Demo ===")
 
-    # 2. Listening or Reading選択
     selected_type = input(
-        "Listening または Reading を入力してください: "
+        "L (Listening) または R (Reading) を入力: "
+    ).strip().upper()
+    log_print(f"[DEBUG]: selected_type.upper(): {selected_type.upper()}")
+    if selected_type.upper() not in ["L", "R"]:
+        log_print("L または R を入力してください")
+        return
+
+    # 受験タイプと番号を決定(リスニング or リーディング, テスト番号(1~5))
+    selected_test_no = input(
+        "問題番号 (1～5) を入力: "
     ).strip()
-
-    if selected_type not in ["Listening", "Reading"]:
-        print("入力エラー")
+    if selected_test_no not in ["1", "2", "3", "4", "5"]:
+        log_print("問題番号は 1～5 を入力してください")
         return
+    answer_sheetname = f"{selected_type}_{selected_test_no}"
+    log_print(f"[DEBUG]: answer_sheetname: {answer_sheetname}")
 
-    # 3. 問題番号選択
-    try:
-        selected_test_no = int(
-            input("問題番号(1～5)を入力してください: ")
+    # 問題用紙読み込み
+    question_wb = load_workbook(QUESTION_FILE)
+    question_sheetname = "回答用紙"
+    if question_sheetname not in question_wb.sheetnames:
+        log_print(f"{question_filename} に [{question_sheetname}] シートが存在しません")
+        return
+    # 受験者回答シート
+    user_sheet = question_wb[question_sheetname]
+    user_answers = load_answers(user_sheet)
+
+
+    # 解答用紙読み込み
+    answer_wb = load_workbook(ANSWER_FILE)
+    if answer_sheetname not in answer_wb.sheetnames:
+        log_print(
+            f"{answer_filename} に "
+            f"[{answer_sheetname}] シートが存在しません"
         )
-    except ValueError:
-        print("入力エラー")
         return
 
-    if selected_test_no not in range(1, 6):
-        print("問題番号は1～5です")
-        return
-
-    # 問題ファイル読み込み
-    wb = load_workbook(QUESTION_FILE)
-
-    # 4. 受験者回答
-    answer_sheet = wb["回答用紙"]
-    user_answers = load_answers(answer_sheet)
-
-    # 5. 正解シート
-    answer_key_name = (
-        f"{selected_type}_{selected_test_no}"
-    )
-
-    if answer_key_name not in wb.sheetnames:
-        print(f"シート[{answer_key_name}]が存在しません")
-        return
-
-    answer_key_sheet = wb[answer_key_name]
-    correct_answers = load_answers(answer_key_sheet)
-
-    # 6. 採点
-    total_questions = len(correct_answers)
-
-    correct_count = 0
+    # 正解シート（固定）
+    correct_sheet = answer_wb[answer_sheetname]
+    correct_answers = load_answers(correct_sheet)
+    total = len(correct_answers)
+    correct = 0
+    wrong_questions = []
 
     for question_no, correct_answer in correct_answers.items():
-
         user_answer = user_answers.get(question_no)
-
         if user_answer == correct_answer:
-            correct_count += 1
+            correct += 1
+        else:
+            wrong_questions.append(question_no)
 
-    wrong_count = total_questions - correct_count
+    wrong = total - correct
 
-    accuracy = 0
-
-    if total_questions > 0:
-        accuracy = (
-            correct_count / total_questions
-        ) * 100
-
-    print("\n=== 採点結果 ===")
-    print(f"正答数 : {correct_count}")
-    print(f"誤答数 : {wrong_count}")
-    print(f"正答率 : {accuracy:.2f}%")
-
-    # 7. 結果シート出力
-    result_wb = load_workbook(RESULT_FILE)
-    result_ws = result_wb.active
-
-    next_row = 2
-
-    while result_ws.cell(next_row, 1).value:
-        next_row += 1
-
-    result_ws.cell(next_row, 1).value = datetime.now().strftime(
-        "%Y/%m/%d"
+    accuracy = round(
+        correct / total * 100,
+        2
     )
-    result_ws.cell(next_row, 2).value = (
-        selected_type if selected_type == "Listening" else ""
-    )
-    result_ws.cell(next_row, 3).value = (
-        selected_type if selected_type == "Reading" else ""
-    )
-    result_ws.cell(next_row, 4).value = correct_count
-    result_ws.cell(next_row, 5).value = round(accuracy, 2)
 
-    result_wb.save(RESULT_FILE)
+    if wrong_questions:
+        log_print()
+        log_print("不正解問題:")
+        log_print(", ".join(map(str, wrong_questions)))
 
-    print("\n結果シートへ出力しました。")
+    log_print()
+    log_print("=== 採点結果 ===")
+    log_print(f"正答数 : {correct}")
+    log_print(f"誤答数 : {wrong}")
+    log_print(f"正答率 : {accuracy}%")
+
+
+    # 結果シート
+    result_sheet_name = "結果"
+
+    if result_sheet_name not in answer_wb.sheetnames:
+
+        result_ws = answer_wb.create_sheet(result_sheet_name)
+
+        result_ws["A1"] = "実施日"
+        result_ws["B1"] = "Listening"
+        result_ws["C1"] = "Reading"
+        result_ws["D1"] = "正答"
+        result_ws["E1"] = "正答率"
+
+    else:
+        result_ws = answer_wb[result_sheet_name]
+
+    row = result_ws.max_row + 1
+
+    result_ws[f"A{row}"] = datetime.now().strftime("%Y/%m/%d")
+
+    if selected_type == "L":
+        result_ws[f"B{row}"] = selected_test_no
+        result_ws[f"C{row}"] = ""
+    else:
+        result_ws[f"B{row}"] = ""
+        result_ws[f"C{row}"] = selected_test_no
+
+    result_ws[f"D{row}"] = correct
+    result_ws[f"E{row}"] = accuracy
+
+    answer_wb.save(ANSWER_FILE)
+
+    log_print()
+    log_print("結果シートへ保存しました")
 
 
 if __name__ == "__main__":
